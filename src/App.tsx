@@ -19,7 +19,7 @@ import { CertificateModal } from './components/CertificateModal';
 import { ReminderToast } from './components/ReminderToast';
 import { ActiveReminderAlert, triggerSystemNotification, requestNotificationPermission } from './utils/notifications';
 import { validateChallengeData } from './utils/validation';
-import { importChallengeFromExcel } from './utils/excelDatabase';
+import { importChallengeFromExcel, autoPersistToExcelDatabase } from './utils/excelDatabase';
 import { Trophy, Sparkles, RefreshCw, ArrowRight, Award, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export default function App() {
@@ -55,14 +55,31 @@ export default function App() {
     }, 3500);
   };
 
-  // Load existing data on mount
+  // Load existing data on mount from server API or localStorage fallback
   useEffect(() => {
-    const existing = getStoredChallenge();
-    if (existing && existing.isSetupComplete) {
-      setChallenge(existing);
-    } else {
-      setSetupStep('empty');
-    }
+    fetch('/api/challenge')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.challenge && data.challenge.isSetupComplete) {
+          setChallenge(data.challenge);
+          saveChallenge(data.challenge);
+        } else {
+          const existing = getStoredChallenge();
+          if (existing && existing.isSetupComplete) {
+            setChallenge(existing);
+          } else {
+            setSetupStep('empty');
+          }
+        }
+      })
+      .catch(() => {
+        const existing = getStoredChallenge();
+        if (existing && existing.isSetupComplete) {
+          setChallenge(existing);
+        } else {
+          setSetupStep('empty');
+        }
+      });
   }, []);
 
   // Background reminder scheduler ticker: checks every 10 seconds against local clock
@@ -117,10 +134,15 @@ export default function App() {
     return () => clearInterval(interval);
   }, [challenge]);
 
-  // Save changes to localStorage whenever challenge changes
+  // Save changes to localStorage and linked Excel database whenever challenge changes
   const updateAndSaveChallenge = (updated: SankalpChallenge) => {
     setChallenge(updated);
     saveChallenge(updated);
+    autoPersistToExcelDatabase(updated).then((saved) => {
+      if (saved) {
+        showSystemToast('Auto-saved to permanent Excel database!', 'success');
+      }
+    }).catch(() => {});
   };
 
   // FLOW 1: Start from empty

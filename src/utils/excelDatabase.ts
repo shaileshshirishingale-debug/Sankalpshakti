@@ -2,10 +2,51 @@ import * as XLSX from 'xlsx';
 import { SankalpChallenge, Category, Sankalp, DayRecord } from '../types';
 import { validateChallengeData } from './validation';
 
+let linkedFileHandle: any = null;
+
 /**
- * Exports the SankalpChallenge data to an Excel (.xlsx) file with multiple structured sheets.
+ * Checks if the browser supports File System Access API for persistent direct Excel database saving.
  */
-export const exportChallengeToExcel = (challenge: SankalpChallenge): void => {
+export const supportsDirectFileAccess = (): boolean => {
+  return typeof window !== 'undefined' && 'showSaveFilePicker' in window;
+};
+
+/**
+ * Links a permanent local Excel file on the user's computer to serve as the direct database.
+ */
+export const linkPermanentExcelDatabase = async (challenge: SankalpChallenge): Promise<{ success: boolean; error?: string }> => {
+  if (!supportsDirectFileAccess()) {
+    return { success: false, error: 'Direct file access is not supported in this browser. Use Export/Import Excel instead.' };
+  }
+  try {
+    const handle = await (window as any).showSaveFilePicker({
+      suggestedName: `my_sankalp_database_${challenge.totalDays}days.xlsx`,
+      types: [{
+        description: 'Excel Spreadsheet Database',
+        accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
+      }],
+    });
+    linkedFileHandle = handle;
+    // Perform initial write
+    await writeChallengeToHandle(challenge, linkedFileHandle);
+    return { success: true };
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return { success: false, error: 'File selection cancelled.' };
+    }
+    return { success: false, error: err?.message || 'Failed to link Excel database file.' };
+  }
+};
+
+const writeChallengeToHandle = async (challenge: SankalpChallenge, handle: any): Promise<void> => {
+  const wb = createWorkbook(challenge);
+  const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const writable = await handle.createWritable();
+  await writable.write(excelBuffer);
+  await writable.close();
+};
+
+const createWorkbook = (challenge: SankalpChallenge) => {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: Overview & Stats
@@ -62,8 +103,29 @@ export const exportChallengeToExcel = (challenge: SankalpChallenge): void => {
   const wsHistory = XLSX.utils.aoa_to_sheet([historyHeaders, ...historyRows]);
   XLSX.utils.book_append_sheet(wb, wsHistory, 'Daily History');
 
-  // Write file and trigger browser download
+  return wb;
+};
+
+/**
+ * Exports the SankalpChallenge data to an Excel (.xlsx) file download.
+ */
+export const exportChallengeToExcel = (challenge: SankalpChallenge): void => {
+  const wb = createWorkbook(challenge);
   XLSX.writeFile(wb, `my_sankalp_database_${challenge.totalDays}days.xlsx`);
+};
+
+/**
+ * Automatically persists challenge updates to the linked Excel database file if active.
+ */
+export const autoPersistToExcelDatabase = async (challenge: SankalpChallenge): Promise<boolean> => {
+  if (!linkedFileHandle) return false;
+  try {
+    await writeChallengeToHandle(challenge, linkedFileHandle);
+    return true;
+  } catch {
+    linkedFileHandle = null; // reset handle if permission lost
+    return false;
+  }
 };
 
 /**
@@ -74,13 +136,11 @@ export const importChallengeFromExcel = async (file: File): Promise<{ isValid: b
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data, { type: 'array' });
 
-    // Find sheet names or use first sheet
     const sheetNames = workbook.SheetNames;
     if (sheetNames.length === 0) {
       return { isValid: false, error: 'Excel file contains no worksheets.' };
     }
 
-    // Try to locate 'Overview', 'Disciplines', and 'Daily History' sheets, or fallback to first sheet as JSON
     const overviewSheet = workbook.Sheets['Overview'] || workbook.Sheets[sheetNames[0]];
     const overviewRows = XLSX.utils.sheet_to_json<Record<string, any>>(overviewSheet, { header: 1 });
 
@@ -89,7 +149,6 @@ export const importChallengeFromExcel = async (file: File): Promise<{ isValid: b
     let currentDay = 1;
     let startDate = new Date().toISOString().split('T')[0];
 
-    // Parse overview rows if structured as Field | Value
     for (const row of overviewRows) {
       if (Array.isArray(row) && row.length >= 2) {
         const key = String(row[0]).trim().toLowerCase();
@@ -101,7 +160,6 @@ export const importChallengeFromExcel = async (file: File): Promise<{ isValid: b
       }
     }
 
-    // Parse Disciplines sheet if present
     const discSheet = workbook.Sheets['Disciplines'] || (sheetNames[1] ? workbook.Sheets[sheetNames[1]] : null);
     const rawDisciplines = discSheet ? XLSX.utils.sheet_to_json<Record<string, any>>(discSheet) : [];
 
@@ -116,7 +174,6 @@ export const importChallengeFromExcel = async (file: File): Promise<{ isValid: b
       rawDisciplines.forEach((row, idx) => {
         const titleText = row['Title'] || row['Sankalp Discipline'] || row['title'] || `Habit ${idx + 1}`;
         const catName = row['Category'] || row['category'] || 'Spiritual';
-        // find or create category
         let cat = categories.find((c) => c.name.toLowerCase() === String(catName).toLowerCase());
         if (!cat) {
           cat = {
@@ -159,7 +216,6 @@ export const importChallengeFromExcel = async (file: File): Promise<{ isValid: b
       });
     }
 
-    // Parse Daily History sheet if present
     const histSheet = workbook.Sheets['Daily History'] || (sheetNames[2] ? workbook.Sheets[sheetNames[2]] : null);
     const rawHistory = histSheet ? XLSX.utils.sheet_to_json<Record<string, any>>(histSheet) : [];
 
@@ -198,7 +254,6 @@ export const importChallengeFromExcel = async (file: File): Promise<{ isValid: b
       createdAt: new Date().toISOString(),
     };
 
-    // Run through robust validation schema validator
     return validateChallengeData(constructedChallenge);
   } catch (err: any) {
     return { isValid: false, error: err?.message || 'Failed to parse Excel spreadsheet file.' };

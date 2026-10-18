@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowLeft, Lock, CheckCircle2, XCircle, Flame, Calendar, BookOpen, Star, Award, Grid, List, MessageSquareQuote, PenLine, BarChart2, TrendingUp } from 'lucide-react';
 import { SankalpChallenge } from '../types';
-import { formatDateDisplay, calculateStreak, calculateTotalCompletions } from '../utils/storage';
+import { formatDateDisplay, calculateStreak, calculateMaxStreak, calculateTotalCompletions } from '../utils/storage';
 import { CATEGORY_COLORS } from '../utils/constants';
 import { CertificateModal } from './CertificateModal';
 import { StreaksConsistencyChart } from './StreaksConsistencyChart';
@@ -20,6 +20,7 @@ export const HistoryLog: React.FC<HistoryLogProps> = ({ challenge, onBackToToday
   const [isCertificateOpen, setIsCertificateOpen] = useState(false);
 
   const streak = calculateStreak(challenge);
+  const maxStreak = calculateMaxStreak(challenge);
   const { totalChecked, completedDays, completionRate } = calculateTotalCompletions(challenge);
 
   // Array of days from 1 to currentDay
@@ -293,7 +294,48 @@ export const HistoryLog: React.FC<HistoryLogProps> = ({ challenge, onBackToToday
               selectedDayNumber={selectedDayNumber}
               onSelectDay={(dayNum) => setSelectedDayNumber(dayNum)}
             />
-          ) : (
+          ) : null}
+
+          {/* Positive Reinforcement & Journey Stats Summary */}
+          {(viewMode === 'trend' || viewMode === 'chart') && (
+            <div className="mt-4 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-emerald-500/10 rounded-2xl p-4 sm:p-5 border border-amber-200/80 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-amber-500/20">
+                  <Award className="w-5 h-5 text-amber-100" />
+                </div>
+                <div>
+                  <h4 className="font-display font-bold text-stone-900 text-sm flex items-center gap-1.5">
+                    <span>Journey Reinforcement & Milestone</span>
+                    <span className="text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full font-semibold">
+                      Dridhata
+                    </span>
+                  </h4>
+                  <p className="text-xs text-stone-600 mt-0.5">
+                    {completedDays >= 10
+                      ? 'अद्भुत अनुशासन! आपकी यह निष्ठा आपके उज्ज्वल भविष्य का आधार है।'
+                      : 'हर दिन का छोटा प्रयास बड़े बदलाव लाता है। अपनी गति बनाए रखें!'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 shrink-0 w-full sm:w-auto justify-end">
+                <div className="bg-white px-3.5 py-2 rounded-xl border border-stone-200 shadow-xs text-center">
+                  <span className="text-[10px] font-semibold text-stone-500 uppercase block">Longest Streak</span>
+                  <span className="font-display font-extrabold text-sm text-amber-700 tabular-nums">
+                    {maxStreak} Days 🔥
+                  </span>
+                </div>
+                <div className="bg-white px-3.5 py-2 rounded-xl border border-stone-200 shadow-xs text-center">
+                  <span className="text-[10px] font-semibold text-stone-500 uppercase block">Total Completed</span>
+                  <span className="font-display font-extrabold text-sm text-emerald-700 tabular-nums">
+                    {completedDays} / {totalDays} 🌟
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {viewMode === 'reflections' && (
             /* Reflections Diary View */
             <div className="space-y-3 pt-1">
               <div className="flex items-center justify-between text-xs font-semibold text-stone-700 pb-1 border-b border-stone-100">

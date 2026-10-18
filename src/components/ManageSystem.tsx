@@ -4,7 +4,7 @@ import { formatTimeDisplay } from '../utils/notifications';
 import { SankalpChallenge, Category, Sankalp, CategoryColor, TimeOfDay } from '../types';
 import { CATEGORY_COLORS, COMMON_CATEGORY_EMOJIS, COMMON_SANKALP_EMOJIS, DURATION_OPTIONS } from '../utils/constants';
 import { validateChallengeData } from '../utils/validation';
-import { exportChallengeToExcel, importChallengeFromExcel } from '../utils/excelDatabase';
+import { exportChallengeToExcel, importChallengeFromExcel, linkPermanentExcelDatabase, supportsDirectFileAccess } from '../utils/excelDatabase';
 
 interface ManageSystemProps {
   challenge: SankalpChallenge;
@@ -271,6 +271,15 @@ export const ManageSystem: React.FC<ManageSystemProps> = ({
       showNotice(err?.message || 'Failed to read Excel file.', 'error');
     }
     if (excelInputRef.current) excelInputRef.current.value = '';
+  };
+
+  const handleLinkPermanentExcel = async () => {
+    const res = await linkPermanentExcelDatabase(challenge);
+    if (res.success) {
+      showNotice('Permanent Excel database linked! Changes will auto-save to your Excel file.', 'success');
+    } else {
+      showNotice(res.error || 'Failed to link permanent Excel file.', 'error');
+    }
   };
 
   const handleSaveDays = () => {
@@ -566,6 +575,31 @@ export const ManageSystem: React.FC<ManageSystemProps> = ({
           <h3 className="font-display font-bold text-base text-stone-900">
             Data Backup & Reset
           </h3>
+
+          {supportsDirectFileAccess() && (
+            <button
+              onClick={handleLinkPermanentExcel}
+              className="w-full p-4 rounded-2xl border-2 border-emerald-300 hover:border-emerald-500 bg-gradient-to-r from-emerald-50/80 to-teal-50/50 hover:bg-emerald-50 flex items-center justify-between gap-3 transition-all text-left shadow-xs cursor-pointer group mb-3"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white shadow-xs flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <FileSpreadsheet className="w-5 h-5 text-emerald-100" />
+                </div>
+                <div>
+                  <div className="font-display font-bold text-sm text-stone-900 flex items-center gap-2">
+                    <span>Link Permanent Excel File (Auto-Database)</span>
+                    <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded font-medium">Direct Save</span>
+                  </div>
+                  <div className="text-xs text-stone-600">
+                    Select a local .xlsx file so all progress & updates auto-save directly to Excel as your database
+                  </div>
+                </div>
+              </div>
+              <span className="text-xs font-semibold text-emerald-700 bg-white px-3 py-1.5 rounded-xl border border-emerald-200 shadow-xs shrink-0 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                Link File &rarr;
+              </span>
+            </button>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Export JSON */}

@@ -16,6 +16,11 @@ export const getStoredChallenge = (): SankalpChallenge | null => {
 export const saveChallenge = (challenge: SankalpChallenge): void => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(challenge));
+    fetch('/api/challenge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(challenge),
+    }).catch(() => {});
   } catch (err) {
     console.error('Failed to save Sankalp data to localStorage', err);
   }
