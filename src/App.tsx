@@ -931,6 +931,18 @@ export default function App() {
           <span>{systemToast.message}</span>
         </div>
       )}
+
+      {/* Systems Manager Modal */}
+      <SystemsManagerModal
+        isOpen={isSystemsManagerOpen}
+        onClose={() => setIsSystemsManagerOpen(false)}
+        systems={systemsRegistry.systems}
+        activeSystemId={systemsRegistry.activeId}
+        onSwitchSystem={handleSwitchSystem}
+        onCreateNewSystem={handleCreateNewSystem}
+        onDeleteSystem={handleDeleteSystem}
+        onRenameSystem={handleRenameSystem}
+      />
     </>
   );
 }
