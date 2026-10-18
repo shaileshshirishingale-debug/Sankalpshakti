@@ -5,7 +5,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { SankalpChallenge, Category, Sankalp, SetupStep, ActiveTab, TimeOfDay } from './types';
-import { getStoredChallenge, saveChallenge, clearChallengeData, getTodayDateString, getDateForDay } from './utils/storage';
+import { getStoredChallenge, saveChallenge, clearChallengeData, getTodayDateString, getDateForDay, getStoredSystems, saveSystemsToStorage, SankalpSystemProfile } from './utils/storage';
+import { SystemsManagerModal } from './components/SystemsManagerModal';
 import { playGentleChime, playCelebrationChime, triggerMicroConfetti, triggerDayCompletionCelebration } from './utils/effects';
 import { EmptyState } from './components/EmptyState';
 import { SetupCategories } from './components/SetupCategories';
@@ -35,6 +36,9 @@ export default function App() {
   const [isCompleteDayModalOpen, setIsCompleteDayModalOpen] = useState(false);
   const [isGrandCertificateOpen, setIsGrandCertificateOpen] = useState(false);
 
+  const [isSystemsManagerOpen, setIsSystemsManagerOpen] = useState(false);
+  const [systemsRegistry, setSystemsRegistry] = useState<{ activeId: string | null; systems: SankalpSystemProfile[] }>({ activeId: null, systems: [] });
+
   // Active in-app reminder alert
   const [activeReminderAlert, setActiveReminderAlert] = useState<ActiveReminderAlert | null>(null);
   const firedAlertKeysRef = useRef<Set<string>>(new Set());
@@ -55,32 +59,115 @@ export default function App() {
     }, 3500);
   };
 
-  // Load existing data on mount from server API or localStorage fallback
+  // Load systems registry on mount from server Excel database
   useEffect(() => {
-    fetch('/api/challenge')
+    fetch('/api/systems')
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && data.challenge && data.challenge.isSetupComplete) {
-          setChallenge(data.challenge);
-          saveChallenge(data.challenge);
-        } else {
-          const existing = getStoredChallenge();
-          if (existing && existing.isSetupComplete) {
-            setChallenge(existing);
+        if (data && data.success && data.store) {
+          const reg = data.store;
+          setSystemsRegistry(reg);
+          if (reg.activeId && reg.systems.length > 0) {
+            const active = reg.systems.find((s: any) => s.id === reg.activeId) || reg.systems[0];
+            if (active.challenge && active.challenge.isSetupComplete) {
+              setChallenge(active.challenge);
+            } else {
+              setSetupStep('empty');
+            }
           } else {
             setSetupStep('empty');
           }
         }
       })
       .catch(() => {
-        const existing = getStoredChallenge();
-        if (existing && existing.isSetupComplete) {
-          setChallenge(existing);
-        } else {
-          setSetupStep('empty');
-        }
+        const reg = getStoredSystems();
+        setSystemsRegistry(reg);
+        setSetupStep('empty');
       });
   }, []);
+
+  const handleSwitchSystem = (id: string) => {
+    const sys = systemsRegistry.systems.find((s) => s.id === id);
+    if (sys) {
+      saveSystemsToStorage(sys.id, systemsRegistry.systems);
+      setSystemsRegistry({ activeId: sys.id, systems: systemsRegistry.systems });
+      setChallenge(sys.challenge);
+      setActiveTab('today');
+      showSystemToast(`Switched to "${sys.name}"`, 'success');
+    }
+  };
+
+  const handleCreateNewSystem = (name: string) => {
+    const newId = `sys_${Date.now()}`;
+    const newChallenge: SankalpChallenge = {
+      id: newId,
+      title: name,
+      totalDays: 100,
+      currentDay: 1,
+      startDate: getTodayDateString(),
+      categories: [
+        { id: 'c1', name: 'Spiritual', emoji: '🧘', color: 'amber', order: 0 },
+        { id: 'c2', name: 'Health & Body', emoji: '💪', color: 'emerald', order: 1 },
+      ],
+      sankalps: [
+        { id: 's1', categoryId: 'c1', title: 'Morning Meditation', emoji: '🧘', timeOfDay: 'Morning', duration: '15 min', order: 0, createdAt: new Date().toISOString() },
+      ],
+      history: {
+        1: { dayNumber: 1, dateString: getTodayDateString(), completedSankalpIds: [], totalSankalpsAtTime: 1, isCompleted: false },
+      },
+      isSetupComplete: true,
+      createdAt: new Date().toISOString(),
+    };
+
+    const newSys: SankalpSystemProfile = {
+      id: newId,
+      name,
+      challenge: newChallenge,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updatedSystems = [...systemsRegistry.systems, newSys];
+    saveSystemsToStorage(newId, updatedSystems);
+    setSystemsRegistry({ activeId: newId, systems: updatedSystems });
+    setChallenge(newChallenge);
+    setSetupStep('empty');
+    setActiveTab('today');
+    showSystemToast(`Created & switched to "${name}"`, 'success');
+  };
+
+  const handleDeleteSystem = (id: string) => {
+    const updated = systemsRegistry.systems.filter((s) => s.id !== id);
+    if (updated.length === 0) {
+      showSystemToast('Cannot delete the last remaining system.', 'error');
+      return;
+    }
+    const nextActive = updated[0].id;
+    saveSystemsToStorage(nextActive, updated);
+    setSystemsRegistry({ activeId: nextActive, systems: updated });
+    setChallenge(updated[0].challenge);
+    showSystemToast('System deleted successfully', 'success');
+  };
+
+  const handleRenameSystem = (id: string, newName: string) => {
+    const updated = systemsRegistry.systems.map((s) => {
+      if (s.id === id) {
+        return {
+          ...s,
+          name: newName,
+          challenge: { ...s.challenge, title: newName },
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return s;
+    });
+    const active = updated.find((s) => s.id === systemsRegistry.activeId) || updated[0];
+    saveSystemsToStorage(active.id, updated);
+    setSystemsRegistry({ activeId: active.id, systems: updated });
+    if (challenge && challenge.id === id) {
+      setChallenge({ ...challenge, title: newName });
+    }
+    showSystemToast('System renamed successfully', 'success');
+  };
 
   // Background reminder scheduler ticker: checks every 10 seconds against local clock
   useEffect(() => {
@@ -599,6 +686,7 @@ export default function App() {
           onStartSetup={handleStartSetup}
           onImportBackup={handleImportBackup}
           onImportExcel={handleImportExcel}
+          onOpenSystemsManager={() => setIsSystemsManagerOpen(true)}
         />
       );
     }

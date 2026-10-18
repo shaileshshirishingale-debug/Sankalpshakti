@@ -1,37 +1,66 @@
 import { SankalpChallenge } from '../types';
 
-const STORAGE_KEY = 'my_sankalp_100_din_data_v1';
+export interface SankalpSystemProfile {
+  id: string;
+  name: string;
+  challenge: SankalpChallenge;
+  updatedAt: string;
+}
 
-export const getStoredChallenge = (): SankalpChallenge | null => {
+/**
+ * Fetches stored systems synchronously (or falls back to default empty state).
+ * Note: Real server synchronization happens via fetch /api/systems.
+ */
+export const getStoredSystems = (): { activeId: string | null; systems: SankalpSystemProfile[] } => {
+  return { activeId: null, systems: [] };
+};
+
+/**
+ * Saves systems registry directly to the server Excel database file system via API.
+ */
+export const saveSystemsToStorage = (activeId: string | null, systems: SankalpSystemProfile[]): void => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    fetch('/api/systems', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activeId, systems }),
+    }).catch((err) => {
+      console.error('Failed to sync systems to Excel database file system', err);
+    });
   } catch (err) {
-    console.error('Failed to load Sankalp data from localStorage', err);
-    return null;
+    console.error('Failed to save systems to Excel database', err);
   }
 };
 
+export const getStoredChallenge = (): SankalpChallenge | null => {
+  return null;
+};
+
+/**
+ * Saves challenge directly to the server Excel database file system via API.
+ */
 export const saveChallenge = (challenge: SankalpChallenge): void => {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(challenge));
     fetch('/api/challenge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(challenge),
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error('Failed to sync challenge to Excel database file system', err);
+    });
   } catch (err) {
-    console.error('Failed to save Sankalp data to localStorage', err);
+    console.error('Failed to save challenge to Excel database', err);
   }
 };
 
 export const clearChallengeData = (): void => {
   try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+    fetch('/api/systems', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activeId: null, systems: [] }),
+    }).catch(() => {});
+  } catch {}
 };
 
 export const getTodayDateString = (): string => {
@@ -61,47 +90,27 @@ export const formatDateDisplay = (dateStr: string): string => {
   if (!dateStr) return '';
   try {
     const [y, m, d] = dateStr.split('-').map(Number);
-    const date = new Date(y, m - 1, d, 12, 0, 0);
-    return date.toLocaleDateString('en-IN', {
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
+    const date = new Date(y, m - 1, d);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   } catch {
     return dateStr;
   }
 };
 
-// Compute current streak of consecutive completed days ending at or just before currentDay
+// Compute current streak of consecutive completed days up to currentDay
 export const calculateStreak = (challenge: SankalpChallenge): number => {
   if (!challenge || !challenge.history) return 0;
-
   let streak = 0;
-  const currentDay = challenge.currentDay;
-  const todayRecord = challenge.history[currentDay];
-  let checkDay = currentDay;
+  const todayNum = challenge.currentDay;
 
-  if (
-    todayRecord &&
-    todayRecord.isCompleted &&
-    (todayRecord.completedSankalpIds || []).length > 0
-  ) {
-    streak = 1;
-    checkDay = currentDay - 1;
-  } else if (todayRecord && todayRecord.isCompleted) {
-    // Today was closed/completed as a 0-completion day (an explicit Loss / Missed Day)
-    return 0;
-  } else {
-    // If today is not marked complete yet (in-progress), check unbroken streak from yesterday
-    checkDay = currentDay - 1;
-  }
-
-  while (checkDay >= 1) {
-    const rec = challenge.history[checkDay];
+  // Check backwards from currentDay or todayNum
+  for (let d = todayNum; d >= 1; d--) {
+    const rec = challenge.history[d];
     if (rec && rec.isCompleted && (rec.completedSankalpIds || []).length > 0) {
       streak++;
-      checkDay--;
+    } else if (d === todayNum && !rec) {
+      // If today has no history record yet (in progress), don't break streak yet; check yesterday
+      continue;
     } else {
       break;
     }
@@ -135,68 +144,46 @@ export const calculateMaxStreak = (challenge: SankalpChallenge): number => {
 export const calculateTotalCompletions = (
   challenge: SankalpChallenge
 ): {
-  totalChecked: number;
   completedDays: number;
+  totalChecked: number;
   completionRate: number;
   totalPossible: number;
 } => {
-  if (!challenge || !challenge.history) {
-    return { totalChecked: 0, completedDays: 0, completionRate: 0, totalPossible: 0 };
+  if (!challenge || !challenge.history || !challenge.sankalps) {
+    return { completedDays: 0, totalChecked: 0, completionRate: 0, totalPossible: 0 };
   }
 
-  let totalChecked = 0;
+  const currentD = challenge.currentDay || 1;
+  const totalDays = challenge.totalDays || 100;
+  const maxDayToCheck = Math.min(currentD, totalDays);
+
   let completedDays = 0;
-  let totalPossible = 0;
-  const defaultFallback = Math.max(1, challenge.sankalps?.length || 10);
-  const history = challenge.history;
-  const maxDay = challenge.currentDay;
+  let totalCheckedTasks = 0;
+  let totalPossibleTasks = 0;
 
-  // Process day by day up to currentDay deterministically
-  for (let d = 1; d <= maxDay; d++) {
-    const day = history[d];
-    if (!day) {
-      totalPossible += defaultFallback;
-      continue;
-    }
+  for (let d = 1; d <= maxDayToCheck; d++) {
+    const rec = challenge.history[d];
+    const daySankalps = rec?.daySankalps || challenge.sankalps || [];
+    const dayTargetCount = daySankalps.length > 0 ? daySankalps.length : (challenge.sankalps?.length || 10);
+    
+    totalPossibleTasks += dayTargetCount;
 
-    const ids = day.completedSankalpIds;
-    let uniqueChecked = 0;
-    if (ids && ids.length > 0) {
-      const len = ids.length;
-      if (len === 1) {
-        uniqueChecked = 1;
-      } else if (len === 2) {
-        uniqueChecked = ids[0] === ids[1] ? 1 : 2;
-      } else if (len <= 16) {
-        // Zero-allocation inner loop for habit slot deduplication
-        for (let i = 0; i < len; i++) {
-          let isDup = false;
-          for (let j = 0; j < i; j++) {
-            if (ids[i] === ids[j]) {
-              isDup = true;
-              break;
-            }
-          }
-          if (!isDup) uniqueChecked++;
-        }
-      } else {
-        uniqueChecked = new Set(ids).size;
-      }
-    }
-
-    const possibleForDay = day.daySankalps && day.daySankalps.length > 0
-      ? day.daySankalps.length
-      : (day.totalSankalpsAtTime && day.totalSankalpsAtTime > 0
-          ? day.totalSankalpsAtTime
-          : defaultFallback);
-
-    if (day.isCompleted && uniqueChecked > 0) {
+    if (rec && rec.isCompleted) {
       completedDays++;
     }
-    totalChecked += uniqueChecked;
-    totalPossible += Math.max(1, possibleForDay);
+
+    if (rec && rec.completedSankalpIds) {
+      const uniqueCompletedIds = new Set(rec.completedSankalpIds);
+      totalCheckedTasks += uniqueCompletedIds.size;
+    }
   }
 
-  const completionRate = totalPossible > 0 ? Math.min(100, Math.round((totalChecked / totalPossible) * 100)) : 0;
-  return { totalChecked, completedDays, completionRate, totalPossible };
+  const completionRate = totalPossibleTasks > 0 ? Math.round((totalCheckedTasks / totalPossibleTasks) * 100) : 0;
+
+  return {
+    completedDays,
+    totalChecked: totalCheckedTasks,
+    completionRate,
+    totalPossible: totalPossibleTasks,
+  };
 };

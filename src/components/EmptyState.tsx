@@ -1,14 +1,15 @@
 import React, { useRef } from 'react';
-import { Sparkles, ArrowRight, Upload, Flame, ShieldCheck, CheckCircle2, FileSpreadsheet } from 'lucide-react';
+import { Sparkles, ArrowRight, Upload, Flame, ShieldCheck, CheckCircle2, FileSpreadsheet, Layers } from 'lucide-react';
 import { SANKALP_SUTRAS } from '../utils/constants';
 
 interface EmptyStateProps {
   onStartSetup: () => void;
   onImportBackup: (jsonData: string) => void;
   onImportExcel: (file: File) => void;
+  onOpenSystemsManager: () => void;
 }
 
-export const EmptyState: React.FC<EmptyStateProps> = ({ onStartSetup, onImportBackup, onImportExcel }) => {
+export const EmptyState: React.FC<EmptyStateProps> = ({ onStartSetup, onImportBackup, onImportExcel, onOpenSystemsManager }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const excelInputRef = useRef<HTMLInputElement>(null);
   const sutra = SANKALP_SUTRAS[0];
@@ -144,6 +145,14 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ onStartSetup, onImportBa
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>Import Excel Database (.xlsx)</span>
+            </button>
+
+            <button
+              onClick={onOpenSystemsManager}
+              className="text-xs font-medium text-amber-700 hover:text-amber-900 flex items-center gap-1.5 py-1 px-3 rounded-lg hover:bg-amber-50 transition-colors"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>My Systems List</span>
             </button>
           </div>
         </div>
