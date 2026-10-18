@@ -2,10 +2,11 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import path from 'path';
-import * as XLSX from 'xlsx';
+import { put, head } from '@vercel/blob';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
-const EXCEL_DB_FILE = path.join(DATA_DIR, 'sankalp_database.xlsx');
+const LOCAL_SYSTEMS_FILE = path.join(DATA_DIR, 'systems.json');
+const BLOB_FILENAME = 'sankalp_systems_store.json';
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -24,128 +25,67 @@ interface SystemsStore {
   systems: SystemProfile[];
 }
 
-function loadStoreFromExcel(): SystemsStore {
-  try {
-    if (fs.existsSync(EXCEL_DB_FILE)) {
-      const fileBuffer = fs.readFileSync(EXCEL_DB_FILE);
-      const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-      
-      if (workbook.Sheets['JSONStore']) {
-        const jsonSheet = workbook.Sheets['JSONStore'];
-        const rows = XLSX.utils.sheet_to_json<Record<string, any>>(jsonSheet, { header: 1 });
-        if (rows && rows[0] && rows[0][0]) {
-          const store = JSON.parse(String(rows[0][0]));
-          if (store && Array.isArray(store.systems)) {
-            return store;
+let inMemoryStore: SystemsStore = { activeId: null, systems: [] };
+
+async function loadStore(): Promise<SystemsStore> {
+  // 1. Try loading from Vercel Blob if configured
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const blobMeta = await head(BLOB_FILENAME).catch(() => null);
+      if (blobMeta && blobMeta.url) {
+        const response = await fetch(blobMeta.url);
+        if (response.ok) {
+          const blobData = await response.json();
+          if (blobData && Array.isArray(blobData.systems)) {
+            inMemoryStore = blobData;
+            return blobData;
           }
         }
       }
+    } catch (err) {
+      console.warn('Vercel Blob load fallback:', err);
     }
-  } catch (err) {
-    console.error('Error loading store from Excel database:', err);
   }
 
-  // Default fallback store if excel doesn't exist or is invalid
-  const defaultChallenge = {
-    id: 'sys_default',
-    title: '100 Days Mindful Sankalp',
-    totalDays: 100,
-    currentDay: 1,
-    startDate: new Date().toISOString().split('T')[0],
-    isSetupComplete: false,
-    categories: [],
-    sankalps: [],
-    history: {},
-    createdAt: new Date().toISOString(),
-  };
+  // 2. Try loading from local file system
+  try {
+    if (fs.existsSync(LOCAL_SYSTEMS_FILE)) {
+      const raw = fs.readFileSync(LOCAL_SYSTEMS_FILE, 'utf-8');
+      const store = JSON.parse(raw);
+      if (store && Array.isArray(store.systems)) {
+        inMemoryStore = store;
+        return store;
+      }
+    }
+  } catch (err) {
+    console.warn('Local systems file load fallback:', err);
+  }
 
-  const defaultStore: SystemsStore = {
-    activeId: 'sys_default',
-    systems: [{
-      id: 'sys_default',
-      name: '100 Days Mindful Sankalp',
-      challenge: defaultChallenge,
-      updatedAt: new Date().toISOString(),
-    }],
-  };
-
-  saveStoreToExcel(defaultStore);
-  return defaultStore;
+  // 3. Fallback to in-memory store
+  return inMemoryStore;
 }
 
-function saveStoreToExcel(store: SystemsStore) {
+async function saveStore(store: SystemsStore): Promise<void> {
+  inMemoryStore = store;
+
+  // 1. Save to local file system
   try {
-    const wb = XLSX.utils.book_new();
-
-    // 1. JSONStore sheet for lossless round-tripping
-    const jsonWs = XLSX.utils.aoa_to_sheet([[JSON.stringify(store)]]);
-    XLSX.utils.book_append_sheet(wb, jsonWs, 'JSONStore');
-
-    // 2. Systems Overview sheet
-    const overviewData = [
-      ['System ID', 'System Name', 'Active Status', 'Total Days', 'Current Day', 'Start Date', 'Setup Complete'],
-      ...store.systems.map(s => [
-        s.id,
-        s.name,
-        s.id === store.activeId ? 'Active' : 'Inactive',
-        s.challenge?.totalDays || 100,
-        s.challenge?.currentDay || 1,
-        s.challenge?.startDate || '',
-        s.challenge?.isSetupComplete ? 'Yes' : 'No',
-      ])
-    ];
-    const wsOverview = XLSX.utils.aoa_to_sheet(overviewData);
-    XLSX.utils.book_append_sheet(wb, wsOverview, 'Systems Overview');
-
-    const activeSys = store.systems.find(s => s.id === store.activeId) || store.systems[0];
-    const challenge = activeSys ? activeSys.challenge : null;
-
-    if (challenge) {
-      // 3. Active Disciplines sheet
-      const categoryMap = new Map((challenge.categories || []).map((c: any) => [c.id, c.name]));
-      const disciplinesHeaders = ['Category', 'Title', 'Emoji', 'Time of Day', 'Duration', 'Reminder Enabled', 'Reminder Time'];
-      const disciplinesRows = (challenge.sankalps || []).map((s: any) => [
-        categoryMap.get(s.categoryId) || 'General',
-        s.title,
-        s.emoji || '✨',
-        s.timeOfDay,
-        s.duration,
-        s.reminderEnabled ? 'Yes' : 'No',
-        s.reminderTime || '',
-      ]);
-      const wsDisciplines = XLSX.utils.aoa_to_sheet([disciplinesHeaders, ...disciplinesRows]);
-      XLSX.utils.book_append_sheet(wb, wsDisciplines, 'Active Disciplines');
-
-      // 4. Daily History sheet
-      const historyHeaders = ['Day Number', 'Date', 'Status', 'Completed Count', 'Total Target', 'Completed Sankalps', 'Notes'];
-      const historyRows: any[][] = [];
-      const totalD = challenge.totalDays || 100;
-      for (let d = 1; d <= totalD; d++) {
-        const rec = challenge.history?.[d];
-        const completedIds = rec?.completedSankalpIds || [];
-        const dayTarget = rec?.daySankalps?.length || rec?.totalSankalpsAtTime || (challenge.sankalps || []).length || 10;
-        const status = rec?.isCompleted
-          ? 'Completed'
-          : (d === challenge.currentDay ? 'In Progress' : (d < challenge.currentDay ? 'Missed' : 'Upcoming'));
-
-        historyRows.push([
-          d,
-          rec?.dateString || '',
-          status,
-          completedIds.length,
-          dayTarget,
-          completedIds.join(', '),
-          rec?.notes || '',
-        ]);
-      }
-      const wsHistory = XLSX.utils.aoa_to_sheet([historyHeaders, ...historyRows]);
-      XLSX.utils.book_append_sheet(wb, wsHistory, 'Daily History');
-    }
-
-    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
-    fs.writeFileSync(EXCEL_DB_FILE, excelBuffer);
+    fs.writeFileSync(LOCAL_SYSTEMS_FILE, JSON.stringify(store, null, 2), 'utf-8');
   } catch (err) {
-    console.error('Failed to save store to Excel database:', err);
+    console.warn('Could not write local systems.json:', err);
+  }
+
+  // 2. Save to Vercel Blob if token present
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      await put(BLOB_FILENAME, JSON.stringify(store, null, 2), {
+        access: 'public',
+        addRandomSuffix: false,
+        contentType: 'application/json',
+      });
+    } catch (err) {
+      console.warn('Failed to upload to Vercel Blob:', err);
+    }
   }
 }
 
@@ -155,49 +95,49 @@ async function startServer() {
 
   app.use(express.json({ limit: '15mb' }));
 
-  // API Routes for Multi-System Registry backed by Excel file system database
-  app.get('/api/systems', (req, res) => {
+  // API Routes for Multi-System Registry with Vercel Blob / Local Storage
+  app.get('/api/systems', async (req, res) => {
     try {
-      const store = loadStoreFromExcel();
+      const store = await loadStore();
       res.json({ success: true, store });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Failed to load systems from Excel database' });
+      res.status(500).json({ success: false, error: err?.message || 'Failed to load systems' });
     }
   });
 
-  app.post('/api/systems', (req, res) => {
+  app.post('/api/systems', async (req, res) => {
     try {
       const store: SystemsStore = req.body;
       if (!store || !Array.isArray(store.systems)) {
         res.status(400).json({ success: false, error: 'Invalid systems store data' });
         return;
       }
-      saveStoreToExcel(store);
-      res.json({ success: true, message: 'Systems successfully saved to Excel database file' });
+      await saveStore(store);
+      res.json({ success: true, message: 'Systems successfully saved' });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Failed to save systems to Excel database' });
+      res.status(500).json({ success: false, error: err?.message || 'Failed to save systems' });
     }
   });
 
   // Legacy compatibility endpoint
-  app.get('/api/challenge', (req, res) => {
+  app.get('/api/challenge', async (req, res) => {
     try {
-      const store = loadStoreFromExcel();
+      const store = await loadStore();
       const active = store.systems.find((s) => s.id === store.activeId) || store.systems[0];
       res.json({ success: true, challenge: active ? active.challenge : null });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Failed to load challenge from Excel database' });
+      res.status(500).json({ success: false, error: err?.message || 'Failed to load challenge' });
     }
   });
 
-  app.post('/api/challenge', (req, res) => {
+  app.post('/api/challenge', async (req, res) => {
     try {
       const challenge = req.body;
       if (!challenge) {
         res.status(400).json({ success: false, error: 'Invalid challenge data' });
         return;
       }
-      const store = loadStoreFromExcel();
+      const store = await loadStore();
       let sys = store.systems.find((s) => s.id === challenge.id);
       if (sys) {
         sys.challenge = challenge;
@@ -213,10 +153,20 @@ async function startServer() {
         store.systems.push(sys);
       }
       store.activeId = sys.id;
-      saveStoreToExcel(store);
-      res.json({ success: true, message: 'Challenge saved to Excel database file' });
+      await saveStore(store);
+      res.json({ success: true, message: 'Challenge saved' });
     } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Failed to save challenge to Excel database' });
+      res.status(500).json({ success: false, error: err?.message || 'Failed to save challenge' });
+    }
+  });
+
+  app.post('/api/clear', async (req, res) => {
+    try {
+      const emptyStore: SystemsStore = { activeId: null, systems: [] };
+      await saveStore(emptyStore);
+      res.json({ success: true, message: 'Data cleared' });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Failed to clear data' });
     }
   });
 
@@ -235,7 +185,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT} (Backed by Excel Database file system)`);
+    console.log(`Server running on http://0.0.0.0:${PORT} (Vercel Blob / REST API Store)`);
   });
 }
 

@@ -59,31 +59,35 @@ export default function App() {
     }, 3500);
   };
 
-  // Load systems registry on mount from server Excel database
+  // Load systems registry on mount from local cache + Vercel Blob / Server Store
   useEffect(() => {
+    // 1. Load instantly from local storage cache
+    const localReg = getStoredSystems();
+    if (localReg && localReg.systems && localReg.systems.length > 0) {
+      setSystemsRegistry(localReg);
+      const active = localReg.systems.find((s) => s.id === localReg.activeId) || localReg.systems[0];
+      if (active && active.challenge && active.challenge.isSetupComplete) {
+        setChallenge(active.challenge);
+      }
+    }
+
+    // 2. Sync asynchronously with Vercel Blob / Server API
     fetch('/api/systems')
       .then((res) => res.json())
       .then((data) => {
-        if (data && data.success && data.store) {
+        if (data && data.success && data.store && Array.isArray(data.store.systems) && data.store.systems.length > 0) {
           const reg = data.store;
           setSystemsRegistry(reg);
+          saveSystemsToStorage(reg.activeId, reg.systems);
           if (reg.activeId && reg.systems.length > 0) {
             const active = reg.systems.find((s: any) => s.id === reg.activeId) || reg.systems[0];
             if (active.challenge && active.challenge.isSetupComplete) {
               setChallenge(active.challenge);
-            } else {
-              setSetupStep('empty');
             }
-          } else {
-            setSetupStep('empty');
           }
         }
       })
-      .catch(() => {
-        const reg = getStoredSystems();
-        setSystemsRegistry(reg);
-        setSetupStep('empty');
-      });
+      .catch(() => {});
   }, []);
 
   const handleSwitchSystem = (id: string) => {

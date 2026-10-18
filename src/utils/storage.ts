@@ -1,5 +1,9 @@
 import { SankalpChallenge } from '../types';
 
+const STORAGE_KEY = 'my_sankalp_100_din_data_v1';
+const SYSTEMS_STORAGE_KEY = 'my_sankalp_systems_registry_v2';
+const ACTIVE_SYSTEM_ID_KEY = 'my_sankalp_active_system_id_v2';
+
 export interface SankalpSystemProfile {
   id: string;
   name: string;
@@ -8,58 +12,114 @@ export interface SankalpSystemProfile {
 }
 
 /**
- * Fetches stored systems synchronously (or falls back to default empty state).
- * Note: Real server synchronization happens via fetch /api/systems.
+ * Gets cached systems synchronously from local storage (instant UI render before server sync)
  */
 export const getStoredSystems = (): { activeId: string | null; systems: SankalpSystemProfile[] } => {
+  try {
+    const raw = localStorage.getItem(SYSTEMS_STORAGE_KEY);
+    const activeId = localStorage.getItem(ACTIVE_SYSTEM_ID_KEY);
+    if (raw) {
+      const systems = JSON.parse(raw);
+      if (Array.isArray(systems) && systems.length > 0) {
+        return { activeId, systems };
+      }
+    }
+    // Fallback to legacy single challenge directly without calling getStoredChallenge
+    const legacyRaw = localStorage.getItem(STORAGE_KEY);
+    if (legacyRaw) {
+      const legacy: SankalpChallenge = JSON.parse(legacyRaw);
+      if (legacy && legacy.id) {
+        const prof: SankalpSystemProfile = {
+          id: legacy.id || 'sys_legacy',
+          name: legacy.title || 'My Sankalp System',
+          challenge: legacy,
+          updatedAt: new Date().toISOString(),
+        };
+        return { activeId: prof.id, systems: [prof] };
+      }
+    }
+  } catch {}
+
   return { activeId: null, systems: [] };
 };
 
 /**
- * Saves systems registry directly to the server Excel database file system via API.
+ * Saves systems registry to local cache and syncs with server API / Vercel Blob
  */
 export const saveSystemsToStorage = (activeId: string | null, systems: SankalpSystemProfile[]): void => {
+  try {
+    localStorage.setItem(SYSTEMS_STORAGE_KEY, JSON.stringify(systems));
+    if (activeId) {
+      localStorage.setItem(ACTIVE_SYSTEM_ID_KEY, activeId);
+    }
+  } catch {}
+
   try {
     fetch('/api/systems', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ activeId, systems }),
-    }).catch((err) => {
-      console.error('Failed to sync systems to Excel database file system', err);
-    });
-  } catch (err) {
-    console.error('Failed to save systems to Excel database', err);
-  }
+    }).catch(() => {});
+  } catch {}
 };
 
 export const getStoredChallenge = (): SankalpChallenge | null => {
-  return null;
+  try {
+    const { activeId, systems } = getStoredSystems();
+    if (activeId && systems.length > 0) {
+      const active = systems.find((s) => s.id === activeId);
+      if (active) return active.challenge;
+      return systems[0].challenge;
+    }
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 };
 
-/**
- * Saves challenge directly to the server Excel database file system via API.
- */
 export const saveChallenge = (challenge: SankalpChallenge): void => {
   try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(challenge));
+
+    const { activeId, systems } = getStoredSystems();
+    let updatedSystems = [...systems];
+    const index = updatedSystems.findIndex((s) => s.id === challenge.id);
+    if (index >= 0) {
+      updatedSystems[index] = {
+        id: challenge.id,
+        name: challenge.title || updatedSystems[index].name,
+        challenge,
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      updatedSystems.push({
+        id: challenge.id,
+        name: challenge.title || 'My Sankalp System',
+        challenge,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    saveSystemsToStorage(challenge.id, updatedSystems);
+
     fetch('/api/challenge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(challenge),
-    }).catch((err) => {
-      console.error('Failed to sync challenge to Excel database file system', err);
-    });
-  } catch (err) {
-    console.error('Failed to save challenge to Excel database', err);
-  }
+    }).catch(() => {});
+  } catch {}
 };
 
 export const clearChallengeData = (): void => {
   try {
-    fetch('/api/systems', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activeId: null, systems: [] }),
-    }).catch(() => {});
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(SYSTEMS_STORAGE_KEY);
+    localStorage.removeItem(ACTIVE_SYSTEM_ID_KEY);
+  } catch {}
+
+  try {
+    fetch('/api/clear', { method: 'POST' }).catch(() => {});
   } catch {}
 };
 
