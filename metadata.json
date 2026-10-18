@@ -1,0 +1,8 @@
+{
+  "name": "My Sankalp - 100 Din",
+  "description": "Fully customizable 100-day habit & sankalp tracker. Create your custom category system, track daily disciplines, build unbroken streaks, and complete your vows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
